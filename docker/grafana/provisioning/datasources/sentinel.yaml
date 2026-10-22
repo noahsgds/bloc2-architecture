@@ -1,0 +1,15 @@
+# Source de données de Grafana : la base Sentinel, avec le rôle en LECTURE SEULE.
+apiVersion: 1
+datasources:
+  - name: Sentinel
+    uid: sentinel-pg
+    type: grafana-postgresql-datasource
+    url: postgres:5432
+    user: grafana_lecture
+    isDefault: true
+    jsonData:
+      database: sentinel
+      sslmode: disable # trafic interne au réseau Docker ; TLS en production (voir README)
+      postgresVersion: 1600
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD} # lu dans l'environnement, jamais écrit ici

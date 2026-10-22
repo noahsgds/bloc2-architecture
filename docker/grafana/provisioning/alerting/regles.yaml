@@ -1,0 +1,75 @@
+# Règles d'alerte de la plateforme, versionnées comme le reste de l'infrastructure.
+# Une alerte apparaît dans Grafana (menu Alerting) ; en production, on y brancherait un
+# e-mail ou une messagerie d'équipe (point de contact).
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: plateforme
+    folder: Sentinel
+    interval: 5m
+    rules:
+      - uid: sauvegarde-trop-ancienne
+        title: Aucune sauvegarde depuis plus de 26 heures
+        condition: C
+        for: 0m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severite: critique
+        annotations:
+          summary: La sauvegarde quotidienne n'a pas eu lieu. Vérifier le service "sauvegarde".
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: sentinel-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: SELECT coalesce(heures_depuis_sauvegarde, 999) AS heures FROM supervision.etat_base
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [26] }
+
+      - uid: taux-signalement-anormal
+        title: Taux de fiches signalées anormal sur le dernier jour
+        condition: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severite: avertissement
+        annotations:
+          summary: Plus de 3 % des fiches du dernier jour sont signalées (normal ~1 %). Possible dérive du modèle (bloc 4).
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: sentinel-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT avg(signale::int) * 100 AS pourcentage FROM entrepot.fait_fiche
+                WHERE date_id = (SELECT max(date_id) FROM entrepot.fait_fiche)
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [3] }

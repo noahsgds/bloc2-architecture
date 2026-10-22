@@ -1,0 +1,77 @@
+# Plateforme de données Sentinel : Postgres + Grafana + sauvegardes automatiques.
+#
+#   cp .env.example .env        (puis remplacer tous les "change-me")
+#   docker compose up -d
+#   Grafana : http://localhost:3000   (identifiant admin, mot de passe GRAFANA_ADMIN_PASSWORD)
+#
+# C'est le code d'infrastructure (Infrastructure as Code) : tout ce qui tourne est décrit
+# ici et dans le dossier docker/, versionné dans Git, recréable à l'identique.
+
+services:
+  # Base de données : données opérationnelles, entrepôt en étoile, supervision.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?définir POSTGRES_USER dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD dans .env}
+      POSTGRES_DB: sentinel
+      PIPELINE_PASSWORD: ${PIPELINE_PASSWORD:?définir PIPELINE_PASSWORD dans .env}
+      API_PASSWORD: ${API_PASSWORD:?définir API_PASSWORD dans .env}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?définir GRAFANA_DB_PASSWORD dans .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data # les données survivent à un redémarrage
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro # schéma, rôles, données de démo
+    ports:
+      - "127.0.0.1:5434:5432" # joignable seulement depuis ce poste, jamais depuis le réseau
+    healthcheck:
+      # Par le réseau (-h 127.0.0.1) : pendant son initialisation, Postgres n'écoute pas encore
+      # sur le réseau, donc la base n'est déclarée prête qu'une fois vraiment démarrée.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d sentinel"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 1G }
+
+  # Tableaux de bord et alertes. Tout est provisionné par fichiers (docker/grafana/).
+  grafana:
+    image: grafana/grafana:13.0.10
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?définir GRAFANA_ADMIN_PASSWORD dans .env}
+      GF_USERS_ALLOW_SIGN_UP: "false" # pas de création de compte libre
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD} # lu par le fichier de source de données
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  # Sauvegarde automatique quotidienne de la base (scripts/sauvegarde.sh).
+  sauvegarde:
+    image: postgres:16-alpine # même version que la base : pg_dump compatible
+    entrypoint: ["sh", "/scripts/sauvegarde.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: sentinel
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./scripts:/scripts:ro
+      - sauvegardes:/sauvegardes # volume séparé des données
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  grafana-data:
+  sauvegardes:

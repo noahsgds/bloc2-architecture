@@ -1,0 +1,9 @@
+# Les tableaux de bord sont des fichiers JSON versionnés dans docker/grafana/dashboards/.
+apiVersion: 1
+providers:
+  - name: Sentinel
+    folder: Sentinel
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
