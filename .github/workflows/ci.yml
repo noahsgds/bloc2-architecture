@@ -40,24 +40,25 @@ jobs:
           joueur=$(q "SELECT player_id FROM operationnel.decisions WHERE decision = 'innocente' LIMIT 1")
           q "SELECT supervision.droit_acces('$joueur') -> 'fiches'" | grep -q player_id
           test "$(q "SELECT supervision.droit_effacement('$joueur')")" -ge 1
-          echo "Base, entrepôt et droits RGPD : OK"
+          echo "Base, entrepôt et droits RGPD : OK" | tee -a progression.txt
 
       - name: Vérifier que Grafana ne peut pas lire les identifiants des joueurs
         run: |
           docker compose exec -T -e PGPASSWORD=CiTest2026 postgres \
             psql -h localhost -U grafana_lecture -d sentinel -c "SELECT count(*) FROM operationnel.fiches" \
-            && exit 1 || echo "Accès refusé, comme prévu"
+            && exit 1 || echo "Grafana sans accès aux identifiants : OK" | tee -a progression.txt
 
       - name: Vérifier Grafana (source de données, tableau de bord, alertes)
         run: |
           g() { curl -fsS -u admin:CiAdmin2026 "http://localhost:3000$1"; }
-          g /api/datasources/uid/sentinel-pg/health | tee /dev/stderr | grep -qi '"status":"OK"'
-          g "/api/search?query=Sentinel" | grep -q sentinel-plateforme
-          g /api/v1/provisioning/alert-rules | grep -q sauvegarde-trop-ancienne
+          g /api/datasources/uid/sentinel-pg/health | tee -a progression.txt | grep -qi '"status":"OK"'
+          echo " <- source de données" >> progression.txt
+          g "/api/search?query=Sentinel" | grep -q sentinel-plateforme && echo "Tableau de bord : OK" >> progression.txt
+          g /api/v1/provisioning/alert-rules | grep -q sauvegarde-trop-ancienne && echo "Alertes : OK" >> progression.txt
           curl -fsS -u admin:CiAdmin2026 -H "Content-Type: application/json" -X POST http://localhost:3000/api/ds/query \
             -d '{"queries":[{"refId":"A","datasource":{"uid":"sentinel-pg"},"rawSql":"SELECT count(*) AS n FROM entrepot.fait_fiche","format":"table"}],"from":"now-1h","to":"now"}' \
             | grep -q '45000'
-          echo "Grafana : OK"
+          echo "Grafana : OK" | tee -a progression.txt
 
       - name: Vérifier la sauvegarde et la restauration
         run: |
@@ -69,6 +70,7 @@ jobs:
       - name: Journaux en cas d'échec
         if: failure()
         run: |
-          docker compose ps -a
-          docker compose logs --tail 40 > logs.txt 2>&1
+          touch progression.txt
+          { echo "== Progression"; cat progression.txt; docker compose ps -a;
+            docker compose logs --tail 25 postgres sauvegarde; } > logs.txt 2>&1
           tail -c 6000 logs.txt | python3 -c "import sys; t = sys.stdin.read(); print('::error title=Journaux::' + t.replace('%', '%25').replace('\r', '').replace('\n', '%0A'))"
