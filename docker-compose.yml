@@ -24,7 +24,9 @@ services:
     ports:
       - "127.0.0.1:5434:5432" # joignable seulement depuis ce poste, jamais depuis le réseau
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d sentinel"]
+      # Par le réseau (-h 127.0.0.1) : pendant son initialisation, Postgres n'écoute pas encore
+      # sur le réseau, donc la base n'est déclarée prête qu'une fois vraiment démarrée.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d sentinel"]
       interval: 5s
       retries: 10
     restart: unless-stopped

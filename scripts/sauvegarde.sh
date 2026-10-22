@@ -9,11 +9,17 @@
 set -e
 
 sauvegarder() {
+  # Attendre que la base accepte les connexions (au premier démarrage, elle s'initialise).
+  until pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q; do sleep 2; done
+
   fichier="/sauvegardes/sentinel_$(date +%Y%m%d_%H%M%S).dump"
-  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --file="$fichier"
+  # En cas d'échec, on s'arrête AVANT d'écrire « sauvegarde faite » : jamais d'échec silencieux.
+  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --file="$fichier" \
+    || { rm -f "$fichier"; return 1; }
   taille=$(du -k "$fichier" | cut -f1)
   psql -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q -c \
-    "INSERT INTO supervision.sauvegardes (fichier, taille_ko) VALUES ('$(basename "$fichier")', $taille)"
+    "INSERT INTO supervision.sauvegardes (fichier, taille_ko) VALUES ('$(basename "$fichier")', $taille)" \
+    || return 1
   find /sauvegardes -name "sentinel_*.dump" -mtime +7 -delete
   echo "Sauvegarde faite : $fichier (${taille} Ko)"
 }
@@ -22,7 +28,11 @@ if [ "$1" = "--une-fois" ]; then
   sauvegarder
 else
   while true; do
-    sauvegarder || echo "ERREUR : sauvegarde échouée, nouvel essai dans 1 heure" >&2
-    sleep 86400
+    if sauvegarder; then
+      sleep 86400                      # prochaine sauvegarde dans 24 h
+    else
+      echo "ERREUR : sauvegarde échouée, nouvel essai dans 5 minutes" >&2
+      sleep 300                        # et Grafana alerte si cela dure plus de 26 h
+    fi
   done
 fi
