@@ -1,0 +1,74 @@
+# Déploiement de test à chaque modification : GitHub démarre toute la plateforme comme sur
+# un vrai poste, puis vérifie qu'elle fonctionne (preuve de déploiement effectif).
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read # moindre privilège
+
+jobs:
+  deploiement:
+    name: Déployer et vérifier la plateforme
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Créer un fichier .env de test (mots de passe jetables)
+        run: |
+          sed 's/change-me/CiTest2026/' .env.example > .env
+          sed -i 's/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=CiAdmin2026/' .env
+
+      - name: Démarrer la plateforme
+        run: |
+          docker compose up -d
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:3000/api/health && break
+            sleep 2
+          done
+
+      - name: Vérifier la base (données, rôles, RGPD)
+        run: |
+          q() { docker compose exec -T postgres psql -U sentinel -d sentinel -tA -c "$1"; }
+          test "$(q 'SELECT count(*) FROM entrepot.fait_fiche')" -gt 40000
+          joueur=$(q "SELECT player_id FROM operationnel.decisions WHERE decision = 'innocente' LIMIT 1")
+          q "SELECT supervision.droit_acces('$joueur') -> 'fiches'" | grep -q player_id
+          test "$(q "SELECT supervision.droit_effacement('$joueur')")" -ge 1
+          echo "Base, entrepôt et droits RGPD : OK"
+
+      - name: Vérifier que Grafana ne peut pas lire les identifiants des joueurs
+        run: |
+          docker compose exec -T -e PGPASSWORD=CiTest2026 postgres \
+            psql -h localhost -U grafana_lecture -d sentinel -c "SELECT count(*) FROM operationnel.fiches" \
+            && exit 1 || echo "Accès refusé, comme prévu"
+
+      - name: Vérifier Grafana (source de données, tableau de bord, alertes)
+        run: |
+          g() { curl -fsS -u admin:CiAdmin2026 "http://localhost:3000$1"; }
+          g /api/datasources/uid/sentinel-pg/health | tee /dev/stderr | grep -qi '"status":"OK"'
+          g "/api/search?query=Sentinel" | grep -q sentinel-plateforme
+          g /api/v1/provisioning/alert-rules | grep -q sauvegarde-trop-ancienne
+          curl -fsS -u admin:CiAdmin2026 -H "Content-Type: application/json" -X POST http://localhost:3000/api/ds/query \
+            -d '{"queries":[{"refId":"A","datasource":{"uid":"sentinel-pg"},"rawSql":"SELECT count(*) AS n FROM entrepot.fait_fiche","format":"table"}],"from":"now-1h","to":"now"}' \
+            | grep -q '45000'
+          echo "Grafana : OK"
+
+      - name: Vérifier la sauvegarde et la restauration
+        run: |
+          sleep 5
+          docker compose exec -T postgres psql -U sentinel -d sentinel -tA -c "SELECT count(*) FROM supervision.sauvegardes" | grep -qv '^0$'
+          ./scripts/restaurer.sh | tee restauration.log
+          grep -q "45000 fiches" restauration.log
+
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail 40 > logs.txt 2>&1
+          tail -c 6000 logs.txt | python3 -c "import sys; t = sys.stdin.read(); print('::error title=Journaux::' + t.replace('%', '%25').replace('\r', '').replace('\n', '%0A'))"
