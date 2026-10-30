@@ -8,6 +8,10 @@ sauvegardes automatiques testées. Tout démarre avec une commande.
 > Projet réalisé pour la certification « Architecte en Intelligence Artificielle » (RNCP, niveau 7).
 > Toutes les données sont synthétiques.
 
+**Vidéo de démonstration (4 min) :** [la plateforme en fonctionnement](https://www.loom.com/share/8f5699e5a22c4319b322eaa747df5fe9)
+— démarrage, modèle de données, tableau de bord et alertes Grafana, sauvegarde restaurée,
+droit d'accès RGPD et vérification par la CI.
+
 ## Architecture
 
 ```mermaid
